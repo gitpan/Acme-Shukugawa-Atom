@@ -1,4 +1,4 @@
-# $Id: /mirror/coderepos/lang/perl/Acme-Shukugawa-Atom/trunk/lib/Acme/Shukugawa/Atom.pm 43740 2008-03-12T09:14:16.841440Z daisuke  $
+# $Id: /mirror/coderepos/lang/perl/Acme-Shukugawa-Atom/trunk/lib/Acme/Shukugawa/Atom.pm 43770 2008-03-13T01:45:34.634120Z daisuke  $
 
 package Acme::Shukugawa::Atom;
 use strict;
@@ -7,7 +7,7 @@ use utf8;
 use Encode qw(decode_utf8);
 use Text::MeCab;
 
-our $VERSION = '0.00001';
+our $VERSION = '0.00002';
 
 sub translate
 {
@@ -21,13 +21,13 @@ sub translate
     return $string;
 }
 
-sub preprocess
+# Special case handling -- this could be optimized further
+# put it in a sharefile later
+my (@SPECIAL, $EXCEPTION);
+BEGIN
 {
-    my ($self, $strref) = @_;
-
-    # Special case handling -- this could be optimized further
-    # put it in a sharefile later
-    my @special = (
+    @SPECIAL = (
+        '銀座' => 'ザギン',
         '別に' => 'ジリサワゴネタ',
         '予約した' => 'バミった',
         '[2２][4４]時|[0０]時' => 'テッペン',
@@ -36,10 +36,17 @@ sub preprocess
         'お?(?:ばあ|婆)さん' => 'チャンバー',
         '(?:おおきい|大きい)(?:のか?|か)?' => 'カイデー',
     );
+    $EXCEPTION = decode_utf8(join("|",
+        map { $SPECIAL[$_ * 2 + 1] } (0..$#SPECIAL/2) ));
+}
 
-    for(0..$#special/2) {
-        my $pattern = $special[$_ * 2];
-        my $replace = $special[$_ * 2 + 1];
+sub preprocess
+{
+    my ($self, $strref) = @_;
+
+    for(0..$#SPECIAL/2) {
+        my $pattern = $SPECIAL[$_ * 2];
+        my $replace = $SPECIAL[$_ * 2 + 1];
         $$strref =~ s/$pattern/$replace/g;
     }
 }
@@ -53,20 +60,26 @@ sub runthrough
     # First, make it all katakana, except for where the surface is already
     # in hiragana
     my $ret = '';
-    foreach (my $node = $mecab->parse($$strref);
-        $node; $node = $node->next)
-    {
-        my $surface = decode_utf8($node->surface);
-        next unless $surface;
-        if ($surface =~ /^\p{InHiragana}+$/ || $surface =~ /^\p{InKatakana}+$/) {
-            $ret .= $surface;
-        } else {
-            my $feature = decode_utf8($node->feature);
 
-            if (my $yomi = (split(/,/, $feature))[8]) {
-                $ret .= $self->atomize($yomi) || $surface;
-            } else {
+    foreach my $text (split(/($EXCEPTION)/, $$strref)) {
+        if ($text =~ /$EXCEPTION/) {
+            $ret .= $text;
+            next;
+        }
+
+        foreach (my $node = $mecab->parse($text); $node; $node = $node->next) {
+            my $surface = decode_utf8($node->surface);
+            next unless $surface;
+            if ($surface =~ /^\p{InHiragana}+$/) {
                 $ret .= $surface;
+            } else {
+                my $feature = decode_utf8($node->feature);
+
+                if (my $yomi = (split(/,/, $feature))[8]) {
+                    $ret .= $self->atomize($yomi) || $surface;
+                } else {
+                    $ret .= $surface;
+                }
             }
         }
     }
@@ -75,15 +88,46 @@ sub runthrough
 
 sub postprocess {}
 
+# シースールール
+# 寿司→シースー
+# ン、が最後だったらひっくり返さない
+my $small    = decode_utf8("[ャュョッー]");
+my $syllable = decode_utf8("(?:.$small?)");
+my $nbar     = decode_utf8("^ンー");
+sub apply_shisu_rule
+{
+    my ($self, $yomi) = @_;
+    return $yomi if $yomi =~ s/^($syllable)($syllable)$/$2ー$1ー/;
+    return;
+}
+
+# ワイハールール
+# ハワイ→ワイハー
+sub apply_waiha_rule
+{
+    my ($self, $yomi) = @_;
+
+    if ($yomi =~ s/^(${syllable}[$nbar]?)([^$nbar].)$/$2$1/) {
+        $yomi =~ s/([^ー])$/$1ー/;
+        return $yomi;
+    }
+    return;
+}
+
 sub atomize
 {
     my ($self, $yomi) = @_;
     $yomi =~ s/ー+/ー/g;
 
+    # Length
     my $length = length($yomi);
-    if ($length <= 2) {
-        return $yomi if $yomi =~ s/(.)([^ン])/$2ー$1ー/;
-        return;
+    $length -= ($yomi =~ /$small/g);
+    if ($length == 2) {
+        return $self->apply_shisu_rule($yomi);
+    }
+
+    if ($length == 3) {
+        return $self->apply_waiha_rule($yomi);
     }
 
     my $done = 0;
@@ -128,7 +172,7 @@ Acme::Shukugawa::Atom - ギロッポンにテッペンでバミった
 
 svnが使える方はこちらからどうぞ：
 
-  http://svn.coderepos.org/share.lang/perl/Acme-Shukugawa-Atom/trunk
+  http://svn.coderepos.org/share/lang/perl/Acme-Shukugawa-Atom/trunk
 
 =head1 AUTHOR
 
