@@ -1,4 +1,4 @@
-# $Id: /mirror/coderepos/lang/perl/Acme-Shukugawa-Atom/trunk/lib/Acme/Shukugawa/Atom.pm 43770 2008-03-13T01:45:34.634120Z daisuke  $
+# $Id: /mirror/coderepos/lang/perl/Acme-Shukugawa-Atom/trunk/lib/Acme/Shukugawa/Atom.pm 47660 2008-03-13T07:01:48.357924Z daisuke  $
 
 package Acme::Shukugawa::Atom;
 use strict;
@@ -7,7 +7,7 @@ use utf8;
 use Encode qw(decode_utf8);
 use Text::MeCab;
 
-our $VERSION = '0.00002';
+our $VERSION = '0.00003';
 
 sub translate
 {
@@ -23,14 +23,18 @@ sub translate
 
 # Special case handling -- this could be optimized further
 # put it in a sharefile later
-my (@SPECIAL, $EXCEPTION);
+my (@SPECIAL, $EXCEPTION, $RE_SMALL, $RE_SYLLABLE, $RE_NBAR);
 BEGIN
 {
+    $RE_SMALL    = decode_utf8("[ャュョッー]");
+    $RE_SYLLABLE = decode_utf8("(?:.$RE_SMALL?)");
+    $RE_NBAR     = decode_utf8("^ンー");
     @SPECIAL = (
+        '小飼弾|(?i)dankogai|(?i)kogaidan' => 'ガイダンコ',
         '銀座' => 'ザギン',
         '別に' => 'ジリサワゴネタ',
         '予約した' => 'バミった',
-        '[2２][4４]時|[0０]時' => 'テッペン',
+        '[2２][4４]時|午前[0０]時' => 'テッペン',
         '巨乳|胸(?:の|が)(大きい|でかい|デカイ)' => 'パイオツカイデー',
         '女性|女の人|お姉さん|おねーさん' => 'チャンネー',
         'お?(?:ばあ|婆)さん' => 'チャンバー',
@@ -68,18 +72,27 @@ sub runthrough
         }
 
         foreach (my $node = $mecab->parse($text); $node; $node = $node->next) {
+            next unless $node->surface;
             my $surface = decode_utf8($node->surface);
-            next unless $surface;
-            if ($surface =~ /^\p{InHiragana}+$/) {
-                $ret .= $surface;
-            } else {
-                my $feature = decode_utf8($node->feature);
+            my $feature = decode_utf8($node->feature);
+            my ($type, $yomi) = (split(/,/, $feature))[0,8];
 
-                if (my $yomi = (split(/,/, $feature))[8]) {
-                    $ret .= $self->atomize($yomi) || $surface;
-                } else {
-                    $ret .= $surface;
+            if ($type eq '動詞' && $node->next) {
+                # 助動詞を計算に入れる
+                my $next_feature = decode_utf8($node->next->feature);
+                my ($next_type, $next_yomi) = (split(/,/, $next_feature))[0,8];
+                if ($next_type eq '助動詞') {
+                    $yomi .= $next_yomi;
+                    $node = $node->next;
                 }
+            }
+
+            if ($type =~ /副詞|助動詞|形容詞|接続詞|助詞/ && $surface =~ /^\p{InHiragana}+$/) {
+                $ret .= $surface;
+            } elsif ($yomi) {
+                $ret .= $self->atomize($yomi) || $surface;
+            } else {
+                $ret .= $surface;
             }
         }
     }
@@ -91,13 +104,10 @@ sub postprocess {}
 # シースールール
 # 寿司→シースー
 # ン、が最後だったらひっくり返さない
-my $small    = decode_utf8("[ャュョッー]");
-my $syllable = decode_utf8("(?:.$small?)");
-my $nbar     = decode_utf8("^ンー");
 sub apply_shisu_rule
 {
     my ($self, $yomi) = @_;
-    return $yomi if $yomi =~ s/^($syllable)($syllable)$/$2ー$1ー/;
+    return $yomi if $yomi =~ s/^($RE_SYLLABLE)($RE_SYLLABLE)$/$2ー$1ー/;
     return;
 }
 
@@ -107,8 +117,22 @@ sub apply_waiha_rule
 {
     my ($self, $yomi) = @_;
 
-    if ($yomi =~ s/^(${syllable}[$nbar]?)([^$nbar].)$/$2$1/) {
-        $yomi =~ s/([^ー])$/$1ー/;
+# warn "WAIHA $yomi";
+    if ($yomi =~ s/^(${RE_SYLLABLE}[$RE_NBAR]?)([^$RE_NBAR].)$/$2$1/) {
+        $yomi =~ s/(^.[^ー].*[^ー])$/$1ー/;
+        return $yomi;
+    }
+    return;
+}
+
+# クリビツルール
+# びっくり→クリビツ
+sub apply_kuribitsu_rule
+{
+    my ($self, $yomi) = @_;
+
+# warn "KURIBITSU $yomi";
+    if ($yomi =~ s/^(..)([^$RE_NBAR]${RE_SYLLABLE}$)/$2$1/) {
         return $yomi;
     }
     return;
@@ -120,19 +144,35 @@ sub atomize
     $yomi =~ s/ー+/ー/g;
 
     # Length
-    my $length = length($yomi);
-    $length -= ($yomi =~ /$small/g);
+    my $word_length = length($yomi);
+    my $length = $word_length - ($yomi =~ /$RE_SMALL/g);
+    if ($length == 3 && $yomi =~ s/^(${RE_SYLLABLE})ッ/${1}ツ/) {
+# warn "Special rule!";
+        $length = 4;
+    }
+    my $done = 0;
+
+# warn "$yomi LENGTH: $length";
     if ($length == 2) {
-        return $self->apply_shisu_rule($yomi);
+        my $tmp = $self->apply_shisu_rule($yomi);
+        if ($tmp) {
+            $yomi = $tmp;
+            $done = 1;
+        }
     }
 
     if ($length == 3) {
-        return $self->apply_waiha_rule($yomi);
+        my $tmp = $self->apply_waiha_rule($yomi);
+        if ($tmp) {
+            $yomi = $tmp;
+            $done = 1;
+        }
     }
 
-    my $done = 0;
     if ($length == 4) { # 4 character words tend to have special xformation
-        if ($yomi =~ s/^(.ー)(..)$/$2$1/) {
+        my $tmp = $self->apply_kuribitsu_rule($yomi);
+        if ($tmp) {
+            $yomi = $tmp;
             $done = 1;
         }
     }

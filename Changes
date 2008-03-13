@@ -1,6 +1,11 @@
 Changes
 =======
 
+0.00003 - 13 Mar 2008
+  * Use Test::Base (typester)
+  * Created "kuribitsu rule"
+  * Check for word type before converting
+
 0.00002 - 13 Mar 2008
   * Created "waiha rule" and "shisu rule"
 

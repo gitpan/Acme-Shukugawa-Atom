@@ -1,24 +1,57 @@
-use strict;
+use Test::Base;
 use utf8;
-use Test::More (tests => 7);
 
-BEGIN
-{
-    use_ok("Acme::Shukugawa::Atom");
+plan tests => 1 + 1 * blocks;
+
+use_ok("Acme::Shukugawa::Atom");
+
+
+sub translate {
+    Acme::Shukugawa::Atom->translate(shift);
 }
 
-my %data = (
-    "六本木の胸の大きいお姉さんがいる店を予約した"
-        => "ギロッポンのパイオツカイデーチャンネーがいるセーミーをバミった" ,
-    "ハワイ" => "ワイハー",
-    "寿司"   => "シースー",
-    "銀座" => "ザギン",
-    "狼" => "カミオー",
-#     "鋏" => "サミハー", <- mecabの辞書にない？
-    "おばあさんの口はどうして大きいの？" =>
-        "チャンバーのチークーはどうしてカイデー？"
-);
+filters {
+    input => 'translate',
+};
 
-while (my($orig, $expected) = each %data) {
-    is( Acme::Shukugawa::Atom->translate($orig), $expected );
-}
+run_is;
+
+__DATA__
+
+===
+--- input:    六本木の胸の大きいお姉さんがいる店を予約した
+--- expected: ギロッポンのパイオツカイデーチャンネーがルーイーセーミーをバミった
+
+===
+--- input:    ハワイ
+--- expected: ワイハー
+
+===
+--- input:    寿司
+--- expected: シースー
+
+===
+--- input:    銀座で午前0時に寿司行こう
+--- expected: ザギンでテッペンにシースーコウイー
+
+===
+--- input:    狼
+--- expected: カミオー
+
+===
+--- SKIP
+# mecabの辞書にない？
+--- input:    鋏
+--- expected: サミハー
+
+===
+--- input:    おばあさんの口はどうして大きいの？
+--- expected: チャンバーのチークーはどうしてカイデー？
+
+===
+--- input:    別にdankogaiはエヌジーというわけではない
+--- expected: ジリサワゴネタガイダンコはジーエヌというケーワーではない
+
+===
+--- input:    びっくり
+--- expected: クリビツ
