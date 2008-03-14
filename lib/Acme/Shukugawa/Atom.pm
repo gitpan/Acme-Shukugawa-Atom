@@ -1,18 +1,54 @@
-# $Id: /mirror/coderepos/lang/perl/Acme-Shukugawa-Atom/trunk/lib/Acme/Shukugawa/Atom.pm 47660 2008-03-13T07:01:48.357924Z daisuke  $
+# $Id: /mirror/coderepos/lang/perl/Acme-Shukugawa-Atom/trunk/lib/Acme/Shukugawa/Atom.pm 47728 2008-03-14T01:07:28.622095Z daisuke  $
 
 package Acme::Shukugawa::Atom;
 use strict;
 use warnings;
+use base qw(Class::Accessor::Fast);
 use utf8;
 use Encode qw(decode_utf8);
+use File::ShareDir;
 use Text::MeCab;
+use YAML ();
 
-our $VERSION = '0.00003';
+our $VERSION = '0.00004';
+
+__PACKAGE__->mk_accessors($_) for qw(custom_words);
+
+# Special case handling -- this could be optimized further
+# put it in a sharefile later
+our ($CONFIG, @DEFAULT_WORDS, $RE_EXCEPTION, $RE_SMALL, $RE_SYLLABLE, $RE_NBAR);
+BEGIN
+{
+    my $config = YAML::LoadFile( 
+        $CONFIG || File::ShareDir::module_file(__PACKAGE__, 'config.yaml') );
+    $RE_SMALL    = decode_utf8("[ャュョッー]");
+    $RE_SYLLABLE = decode_utf8("(?:.$RE_SMALL?)");
+    $RE_NBAR     = decode_utf8("^ンー");
+    @DEFAULT_WORDS = map { 
+        (decode_utf8($_->[0]), decode_utf8($_->[1]))
+    } @{ $config->{custom_words} || [] };
+}
+
+sub _create_exception_re
+{
+    my $self = shift;
+    my $custom = $self->custom_words;
+
+    return decode_utf8(join("|",
+        map { $custom->[$_ * 2 + 1] } (0..(scalar(@$custom) - 1)/2) ));
+}
 
 sub translate
 {
     my $self   = shift;
     my $string = decode_utf8(shift);
+
+    if (! ref $self) {
+        $self = $self->new({ custom_words => \@DEFAULT_WORDS, @_ });
+    }
+
+    # Create local RE_EXCEPTION
+    local $RE_EXCEPTION = $self->_create_exception_re;
 
     $self->preprocess(\$string);
     $self->runthrough(\$string);
@@ -21,36 +57,14 @@ sub translate
     return $string;
 }
 
-# Special case handling -- this could be optimized further
-# put it in a sharefile later
-my (@SPECIAL, $EXCEPTION, $RE_SMALL, $RE_SYLLABLE, $RE_NBAR);
-BEGIN
-{
-    $RE_SMALL    = decode_utf8("[ャュョッー]");
-    $RE_SYLLABLE = decode_utf8("(?:.$RE_SMALL?)");
-    $RE_NBAR     = decode_utf8("^ンー");
-    @SPECIAL = (
-        '小飼弾|(?i)dankogai|(?i)kogaidan' => 'ガイダンコ',
-        '銀座' => 'ザギン',
-        '別に' => 'ジリサワゴネタ',
-        '予約した' => 'バミった',
-        '[2２][4４]時|午前[0０]時' => 'テッペン',
-        '巨乳|胸(?:の|が)(大きい|でかい|デカイ)' => 'パイオツカイデー',
-        '女性|女の人|お姉さん|おねーさん' => 'チャンネー',
-        'お?(?:ばあ|婆)さん' => 'チャンバー',
-        '(?:おおきい|大きい)(?:のか?|か)?' => 'カイデー',
-    );
-    $EXCEPTION = decode_utf8(join("|",
-        map { $SPECIAL[$_ * 2 + 1] } (0..$#SPECIAL/2) ));
-}
-
 sub preprocess
 {
     my ($self, $strref) = @_;
+    my $custom = $self->custom_words;
 
-    for(0..$#SPECIAL/2) {
-        my $pattern = $SPECIAL[$_ * 2];
-        my $replace = $SPECIAL[$_ * 2 + 1];
+    for(0..(scalar(@$custom) - 1)/2) {
+        my $pattern = $custom->[$_ * 2];
+        my $replace = $custom->[$_ * 2 + 1];
         $$strref =~ s/$pattern/$replace/g;
     }
 }
@@ -65,17 +79,29 @@ sub runthrough
     # in hiragana
     my $ret = '';
 
-    foreach my $text (split(/($EXCEPTION)/, $$strref)) {
-        if ($text =~ /$EXCEPTION/) {
+    foreach my $text (split(/($RE_EXCEPTION|\s+)/, $$strref)) {
+        if ($text =~ /$RE_EXCEPTION/) {
+            $ret .= $text;
+            next;
+        }
+
+        if ($text !~ /\S/) {
             $ret .= $text;
             next;
         }
 
         foreach (my $node = $mecab->parse($text); $node; $node = $node->next) {
             next unless $node->surface;
+
             my $surface = decode_utf8($node->surface);
             my $feature = decode_utf8($node->feature);
             my ($type, $yomi) = (split(/,/, $feature))[0,8];
+# warn "$surface -> $type, $yomi";
+
+            if ($surface eq '上手') {
+                $ret .= 'マイウー';
+                next;
+            }
 
             if ($type eq '動詞' && $node->next) {
                 # 助動詞を計算に入れる
@@ -107,7 +133,12 @@ sub postprocess {}
 sub apply_shisu_rule
 {
     my ($self, $yomi) = @_;
-    return $yomi if $yomi =~ s/^($RE_SYLLABLE)($RE_SYLLABLE)$/$2ー$1ー/;
+    return $yomi if $yomi =~ s{^($RE_SYLLABLE)($RE_SYLLABLE)$}{
+        my ($a, $b) = ($1, $2);
+        $a =~ s/ー$//;
+        $b =~ s/ー$//;
+        "${b}ー${a}ー";
+    }e;
     return;
 }
 
@@ -132,7 +163,7 @@ sub apply_kuribitsu_rule
     my ($self, $yomi) = @_;
 
 # warn "KURIBITSU $yomi";
-    if ($yomi =~ s/^(..)([^$RE_NBAR]${RE_SYLLABLE}$)/$2$1/) {
+    if ($yomi =~ s/^(${RE_SYLLABLE}.)([^$RE_NBAR]${RE_SYLLABLE}$)/$2$1/) {
         return $yomi;
     }
     return;
@@ -202,6 +233,33 @@ Acme::Shukugawa::Atom - ギロッポンにテッペンでバミった
   use Acme::Shukugawa::Atom;
   my $newstring = Acme::Shukugawa::Atom->translate($string);
 
+  # By default, share/config.yaml is used (via File::ShareDir) for custom
+  # fixed replacements. You can however override this by specifying the
+  # alternate config filename at load time
+  BEGIN
+  {
+    $Acme::Shukugawa::Atom::CONFIG = '/path/to/config.yaml';
+  }
+  use Acme::Shukugawa::Atom;
+  
+  # Or you can specify them (on top of the default words) at run time
+  my $atom = Acme::Shukugawa::Atom->new(
+    # The default values are stored in @Acme::Shukugawa::Atom::DEFAULT_WORDS
+    custom_words => [
+      'regexp1' => 'replacement1'
+      'regexp2' => 'replacement2'
+      'regexp3' => 'replacement3'
+      'regexp4' => 'replacement4'
+      ....
+    ]
+  );
+  my $newstring = $atom->translate($string);
+
+  # shorter way
+  my $newstring = Acme::Shukugawa::Atom->translate($string,
+    custom_words => [ ... ]
+  );
+
 =head1 DESCRIPTION
 
 夙川アトム風な文章を作成します。
@@ -213,6 +271,9 @@ Acme::Shukugawa::Atom - ギロッポンにテッペンでバミった
 svnが使える方はこちらからどうぞ：
 
   http://svn.coderepos.org/share/lang/perl/Acme-Shukugawa-Atom/trunk
+
+板付き語（固定変換）を足す場合はインスタンス毎にcustom_wordsを変更するか、
+share/config.yaml のcustom_wordsに追加してください。
 
 =head1 AUTHOR
 

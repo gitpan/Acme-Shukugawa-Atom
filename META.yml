@@ -2,6 +2,8 @@
 abstract: "\xE3\x82\xAE\xE3\x83\xAD\xE3\x83\x83\xE3\x83\x9D\xE3\x83\xB3\xE3\x81\xAB\xE3\x83\x86\xE3\x83\x83\xE3\x83\x9A\xE3\x83\xB3\xE3\x81\xA7\xE3\x83\x90\xE3\x83\x9F\xE3\x81\xA3\xE3\x81\x9F"
 author: 
   - Copyright (c) 2007 Daisuke Maki <daisuke@endeworks.jp>
+build_requires: 
+  ExtUtils::MakeMaker: 6.11
 distribution_type: module
 generated_by: Module::Install version 0.68
 license: perl
@@ -14,6 +16,9 @@ no_index:
     - inc
     - t
 requires: 
+  Class::Accessor::Fast: 0
   Encode: 0
+  File::ShareDir: 0
   Text::MeCab: 0.20007
-version: 0.00003
+  YAML: 0
+version: 0.00004
